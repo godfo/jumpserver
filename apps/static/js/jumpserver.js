@@ -125,8 +125,12 @@ function csrfSafeMethod(method) {
 }
 
 function setAjaxCSRFToken() {
-    var csrftoken = getCookie('csrftoken');
-    var sessionid = getCookie('sessionid');
+    let prefix = getCookie('SESSION_COOKIE_NAME_PREFIX');
+    if (!prefix || [`""`, `''`].indexOf(prefix) > -1) {
+        prefix = '';
+    }
+    var csrftoken = getCookie(`${prefix}csrftoken`);
+    var sessionid = getCookie(`${prefix}sessionid`);
 
     $.ajaxSetup({
         beforeSend: function (xhr, settings) {
@@ -137,14 +141,22 @@ function setAjaxCSRFToken() {
     });
 }
 
-function activeNav() {
-    var url_array = document.location.pathname.split("/");
-    var app = url_array[1];
-    var resource = url_array[2];
+function activeNav(prefix) {
+    if (!prefix) {
+        prefix = '/core'
+    }
+    var path = document.location.pathname;
+    path = path.replace(prefix, '');
+    if (path === '/core/download/') {
+        return
+    }
+    var urlArray = path.split("/");
+    var app = urlArray[1];
+    var resource = urlArray[2];
     if (app === '') {
         $('#index').addClass('active');
     } else if (app === 'xpack' && resource === 'cloud') {
-        var item = url_array[3];
+        var item = urlArray[3];
         $("#" + app).addClass('active');
         $('#' + app + ' #' + resource).addClass('active');
         $('#' + app + ' #' + resource + ' #' + item + ' a').css('color', '#ffffff');
@@ -153,7 +165,7 @@ function activeNav() {
     } else {
         $("#" + app).addClass('active');
         $('#' + app + ' #' + resource).addClass('active');
-        $('#' + app + ' #' + resource.replaceAll('-', '_')).addClass('active');
+        $('#' + app + ' #' + resource.replace(/-/g, '_')).addClass('active');
     }
 }
 
@@ -172,7 +184,7 @@ function formSubmit(props) {
     */
     props = props || {};
     var data = props.data || props.form.serializeObject();
-    var redirect_to = props.redirect_to;
+    var redirectTo = props.redirect_to || props.redirectTo;
     $.ajax({
         url: props.url,
         type: props.method || 'POST',
@@ -180,12 +192,8 @@ function formSubmit(props) {
         contentType: props.content_type || "application/json; charset=utf-8",
         dataType: props.data_type || "json"
     }).done(function (data, textState, jqXHR) {
-        if (redirect_to) {
-            if (props.message) {
-                var messages = "ed65330a45559c87345a0eb6ac7812d18d0d8976$[[\"__json_message\"\0540\05425\054\"asdfasdf \\u521b\\u5efa\\u6210\\u529f\"]]"
-                setCookie("messages", messages)
-            }
-            location.href = redirect_to;
+        if (redirectTo) {
+            location.href = redirectTo;
         } else if (typeof props.success === 'function') {
             return props.success(data, textState, jqXHR);
         }
@@ -247,9 +255,8 @@ function formSubmit(props) {
                 noneFieldErrorRef.css('display', 'block');
                 noneFieldErrorRef.html(noneFieldErrorMsg);
             }
-            $('.has-error').get(0).scrollIntoView();
+            $('.has-error :visible').get(0).scrollIntoView();
         }
-
     })
 }
 
@@ -264,11 +271,17 @@ function requestApi(props) {
     if (props.flash_message === false) {
         flash_message = false;
     }
+    var dataBody = props.body || props.data;
+    if (typeof (dataBody) === "object") {
+        dataBody = JSON.stringify(dataBody)
+    }
+    var headers = props.headers || {}
 
     $.ajax({
         url: props.url,
         type: props.method || "PATCH",
-        data: props.body || props.data,
+        headers: headers,
+        data: dataBody,
         contentType: props.content_type || "application/json; charset=utf-8",
         dataType: props.data_type || "json"
     }).done(function (data, textStatue, jqXHR) {
@@ -294,6 +307,8 @@ function requestApi(props) {
                     msg = jqXHR.responseJSON.error
                 } else if (jqXHR.responseJSON.msg) {
                     msg = jqXHR.responseJSON.msg
+                } else if (jqXHR.responseJSON.detail) {
+                    msg = jqXHR.responseJSON.detail
                 }
             }
             if (msg === "") {
@@ -302,40 +317,46 @@ function requestApi(props) {
             toastr.error(msg);
         }
         if (typeof props.error === 'function') {
-            return props.error(jqXHR.responseText, jqXHR.status);
+            return props.error(jqXHR.responseText, jqXHR.responseJSON, jqXHR.status);
         }
     });
     // return true;
 }
 
 // Sweet Alert for Delete
-function objectDelete(obj, name, url, redirectTo) {
+function objectDelete(obj, name, url, redirectTo, title, success_message) {
     function doDelete() {
         var body = {};
         var success = function () {
-            // swal('Deleted!', "[ "+name+"]"+" has been deleted ", "success");
             if (!redirectTo) {
                 $(obj).parent().parent().remove();
             } else {
                 window.location.href = redirectTo;
             }
         };
-        var fail = function () {
-            // swal("错误", "删除"+"[ "+name+" ]"+"遇到错误", "error");
-            swal(gettext('Error'), "[ " + name + " ]" + gettext("Being used by the asset, please unbind the asset first."), "error");
+        var fail = function (responseText, responseJSON, status) {
+            var errorMsg = '';
+            if (responseJSON && responseJSON.error) {
+                errorMsg = '';
+            } else if (status === 404) {
+                errorMsg = gettext("Not found")
+            } else {
+                errorMsg = gettext("Server error")
+            }
+            swal(gettext('Error'), "[ " + name + " ] " + errorMsg);
         };
         requestApi({
             url: url,
             body: JSON.stringify(body),
             method: 'DELETE',
-            success_message: gettext("Delete the success"),
+            success_message: success_message || gettext("Delete the success"),
             success: success,
             error: fail
         });
     }
 
     swal({
-        title: gettext('Are you sure about deleting it?'),
+        title: title || gettext('Are you sure about deleting it?'),
         text: " [" + name + "] ",
         type: "warning",
         showCancelButton: true,
@@ -406,19 +427,22 @@ $.fn.serializeObject = function () {
 };
 
 function makeLabel(data) {
-    return "<label class='detail-key'><b>" + data[0] + ": </b></label>" + data[1] + "</br>"
+    return "<label class='detail-key'><b>" + data[0] + ": </b></label> " + data[1] + "</br>"
 }
 
 function parseTableFilter(value) {
     var cleanValues = [];
+    if (!value) {
+        return {}
+    }
     var valuesArray = value.split(':');
-    for (var i=0; i<valuesArray.length; i++) {
+    for (var i = 0; i < valuesArray.length; i++) {
         var v = valuesArray[i].trim();
         if (!v) {
             continue
         }
         // 如果是最后一个元素，直接push，不需要再处理了, 因为最后一个肯定不是key
-        if (i === valuesArray.length -1) {
+        if (i === valuesArray.length - 1) {
             cleanValues.push(v);
             continue
         }
@@ -435,8 +459,8 @@ function parseTableFilter(value) {
     }
     var filter = {};
     var key = '';
-    for (i=0; i<cleanValues.length; i++) {
-        if (i%2 === 0) {
+    for (i = 0; i < cleanValues.length; i++) {
+        if (i % 2 === 0) {
             key = cleanValues[i]
         } else {
             value = cleanValues[i];
@@ -450,28 +474,12 @@ function parseTableFilter(value) {
 var jumpserver = {};
 jumpserver.checked = false;
 jumpserver.selected = {};
-jumpserver.language = {
-    processing: gettext('Loading') + '...',
-    search: gettext('Search'),
-    select: {
-        rows: {
-            _: gettext("Selected item %d"),
-            0: ""
-        }
-    },
-    lengthMenu: gettext("Per page _MENU_"),
-    info: gettext('Displays the results of items _START_ to _END_; A total of _TOTAL_ entries'),
-    infoFiltered: "",
-    infoEmpty: "",
-    zeroRecords: gettext("No match"),
-    emptyTable: gettext('No record'),
-    paginate: {
-        first: "«",
-        previous: "‹",
-        next: "›",
-        last: "»"
-    }
-};
+jumpserver.language = {};
+
+function setDataTablePagerLength(num) {
+    $.fn.DataTable.ext.pager.numbers_length = num;
+}
+
 jumpserver.initDataTable = function (options) {
     // options = {
     //    ele *: $('#dataTable_id'),
@@ -486,6 +494,7 @@ jumpserver.initDataTable = function (options) {
     //    op_html: 'div.btn-group?',
     //    paging: true
     // }
+    setDataTablePagerLength(5);
     var ele = options.ele || $('.dataTable');
     var columnDefs = [
         {
@@ -582,8 +591,15 @@ jumpserver.initServerSideDataTable = function (options) {
     //    columnDefs: [{target: 0, createdCell: ()=>{}}, ...],
     //    uc_html: '<a>header button</a>',
     //    op_html: 'div.btn-group?',
-    //    paging: true
+    //    paging: true,
+    //    paging_numbers_length: 5;
+    //    hideDefaultDefs: false;
     // }
+    var pagingNumbersLength = 5;
+    if (options.paging_numbers_length) {
+        pagingNumbersLength = options.paging_numbers_length;
+    }
+    setDataTablePagerLength(pagingNumbersLength);
     var ele = options.ele || $('.dataTable');
     var columnDefs = [
         {
@@ -591,7 +607,8 @@ jumpserver.initServerSideDataTable = function (options) {
             orderable: false,
             width: "20px",
             createdCell: function (td, cellData) {
-                $(td).html('<input type="checkbox" class="text-center ipt_check" id=99991937>'.replace('99991937', cellData));
+                var data = '<input type="checkbox" class="text-center ipt_check" id=Id>'.replace('Id', cellData);
+                $(td).html(data);
             }
         },
         {
@@ -600,26 +617,34 @@ jumpserver.initServerSideDataTable = function (options) {
             render: $.fn.dataTable.render.text()
         }
     ];
+    if (options.hideDefaultDefs) {
+        columnDefs = [];
+    }
     var select_style = options.select_style || 'multi';
     columnDefs = options.columnDefs ? options.columnDefs.concat(columnDefs) : columnDefs;
     var select = {
         style: select_style,
         selector: 'td:first-child'
     };
+    var dom = '<"#uc.pull-left"> <"pull-right"<"#lb.inline"> <"inline"l> <"#fb.inline"> <"inline"f><"#fa.inline">>' +
+        'tr' +
+        '<"row m-t"<"col-md-8"<"#op.col-md-6"><"col-md-6 text-center"i>><"col-md-4"p>>';
     var table = ele.DataTable({
         pageLength: options.pageLength || 15,
         // dom: options.dom || '<"#uc.pull-left">fltr<"row m-t"<"col-md-8"<"#op.col-md-6"><"col-md-6 text-center"i>><"col-md-4"p>>',
-        dom: options.dom || '<"#uc.pull-left"><"pull-right"<"inline"l><"#fb.inline"><"inline"f><"#fa.inline">>tr<"row m-t"<"col-md-8"<"#op.col-md-6"><"col-md-6 text-center"i>><"col-md-4"p>>',
+        // dom: options.dom || '<"#uc.pull-left"><"pull-right"<"inline"l><"#fb.inline"><"inline"<"table-filter"f>><"#fa.inline">>tr<"row m-t"<"col-md-8"<"#op.col-md-6"><"col-md-6 text-center"i>><"col-md-4"p>>',
+        dom: options.dom || dom,
         order: options.order || [],
         buttons: [],
         columnDefs: columnDefs,
         serverSide: true,
         processing: true,
         searchDelay: 800,
+        oSearch: options.oSearch,
         ajax: {
             url: options.ajax_url,
             error: function (jqXHR, textStatus, errorThrown) {
-                if (jqXHR.responseText && jqXHR.responseText.indexOf("%(value)s") !== -1 ) {
+                if (jqXHR.responseText && jqXHR.responseText.indexOf("%(value)s") !== -1) {
                     return
                 }
                 var msg = gettext("Unknown error occur");
@@ -686,8 +711,13 @@ jumpserver.initServerSideDataTable = function (options) {
             var rows = table.rows(indexes).data();
             $.each(rows, function (id, row) {
                 if (row.id && $.inArray(row.id, table.selected) === -1) {
-                    table.selected.push(row.id);
-                    table.selected_rows.push(row);
+                    if (select.style === 'multi') {
+                        table.selected.push(row.id);
+                        table.selected_rows.push(row);
+                    } else {
+                        table.selected = [row.id];
+                        table.selected_rows = [row];
+                    }
                 }
             })
         }
@@ -734,6 +764,7 @@ jumpserver.initServerSideDataTable = function (options) {
         $('#uc').html(options.uc_html || '');
         $('#fb').html(options.fb_html || '');
         $('#fa').html(options.fa_html || '');
+        $('#lb').html(options.lb_html || '');
     });
     var table_id = table.settings()[0].sTableId;
     $('#' + table_id + ' .ipt_check_all').on('click', function () {
@@ -982,7 +1013,6 @@ function initPopover($container, $progress, $idPassword, $el, password_check_rul
 }
 
 
-
 function rootNodeAddDom(ztree, callback) {
     var refreshIcon = "<a id='tree-refresh'><i class='fa fa-refresh'></i></a>";
     var rootNode = ztree.getNodes()[0];
@@ -999,89 +1029,6 @@ function rootNodeAddDom(ztree, callback) {
         callback()
     })
 }
-
-function APIExportData(props) {
-    props = props || {};
-    $.ajax({
-        url: '/api/common/v1/resources/cache/',
-        type: props.method || "POST",
-        data: props.body,
-        contentType: props.content_type || "application/json; charset=utf-8",
-        dataType: props.data_type || "json",
-        success: function (data) {
-            var export_url = props.success_url;
-            var params = props.params || {};
-            params['format'] = props.format;
-            params['spm'] = data.spm;
-            for (var k in params) {
-                export_url = setUrlParam(export_url, k, params[k])
-            }
-            window.open(export_url);
-        },
-        error: function () {
-            toastr.error(gettext('Export failed'));
-        }
-    })
-}
-
-function APIImportData(props) {
-    props = props || {};
-    $.ajax({
-        url: props.url,
-        type: props.method || "POST",
-        processData: false,
-        data: props.body,
-        contentType: props.content_type || 'text/csv',
-        success: function (data) {
-            if (props.method === 'POST') {
-                $('#created_failed').html('');
-                $('#created_failed_detail').html('');
-                $('#success_created').html(gettext("Import Success"));
-                $('#success_created_detail').html("Count" + ": " + data.length);
-            } else {
-                $('#updated_failed').html('');
-                $('#updated_failed_detail').html('');
-                $('#success_updated').html(gettext("Update Success"));
-                $('#success_updated_detail').html(gettext("Count") + ": " + data.length);
-            }
-
-            props.data_table.ajax.reload()
-        },
-        error: function (error) {
-            var data = error.responseJSON;
-            if (data instanceof Array) {
-                var html = '';
-                var li = '';
-                var err = '';
-                $.each(data, function (index, item) {
-                    err = '';
-                    for (var prop in item) {
-                        err += prop + ": " + item[prop][0] + " "
-                    }
-                    if (err) {
-                        li = "<li>" + "Line " + (++index) + ". " + err + "</li>";
-                        html += li
-                    }
-                });
-                html = "<ul>" + html + "</ul>"
-            } else {
-                html = error.responseText
-            }
-            if (props.method === 'POST') {
-                $('#success_created').html('');
-                $('#success_created_detail').html('');
-                $('#created_failed').html(gettext("Import failed"));
-                $('#created_failed_detail').html(html);
-            } else {
-                $('#success_updated').html('');
-                $('#success_updated_detail').html('');
-                $('#updated_failed').html(gettext("Update failed"));
-                $('#updated_failed_detail').html(html);
-            }
-        }
-    })
-}
-
 
 function htmlEscape(d) {
     return typeof d === 'string' ?
@@ -1109,8 +1056,16 @@ function objectAttrsIsBool(obj, attrs) {
     attrs.forEach(function (attr) {
         if (!obj[attr]) {
             obj[attr] = false
-        } else if (['on', '1'].includes(obj[attr])) {
-            obj[attr] = true
+        } else {
+            obj[attr] = ['on', '1', 'true', 'True'].includes(obj[attr]);
+        }
+    })
+}
+
+function objectAttrsIsNumber(obj, attrs) {
+    attrs.forEach(function (attr) {
+        if (!obj[attr]) {
+            obj[attr] = null;
         }
     })
 }
@@ -1147,7 +1102,8 @@ function toSafeDateISOStr(s) {
 
 function toSafeLocalDateStr(d) {
     var date = safeDate(d);
-    var date_s = date.toLocaleString(navigator.language, {hour12: false});
+    // var date_s = date.toLocaleString(getUserLang(), {hour12: false});
+    var date_s = date.toLocaleString(getUserLang(), {hourCycle: "h23"});
     return date_s.split("/").join('-')
 }
 
@@ -1167,7 +1123,7 @@ function getTimeUnits(u) {
         "m": "分",
         "s": "秒",
     };
-    if (navigator.language === "zh-CN") {
+    if (getUserLang() === "zh-CN") {
         return units[u]
     }
     return u
@@ -1214,10 +1170,27 @@ function readFile(ref) {
     return ref
 }
 
-function nodesSelect2Init(selector, url) {
-    if (!url) {
-        url = '/api/v1/assets/nodes/'
+
+function select2AjaxInit(option) {
+    /*
+    {
+      selector:
+      url: ,
+      disabledData: ,
+      displayFormat,
+      idFormat,
     }
+     */
+    var selector = option.selector;
+    var url = option.url;
+    var disabledData = option.disabledData;
+    var displayFormat = option.displayFormat || function (data) {
+        return data.name;
+    };
+    var idFormat = option.idFormat || function (data) {
+        return data.id;
+    };
+
     return $(selector).select2({
         closeOnSelect: false,
         ajax: {
@@ -1233,46 +1206,146 @@ function nodesSelect2Init(selector, url) {
             },
             processResults: function (data) {
                 var results = $.map(data.results, function (v, i) {
-                    return {id: v.id, text: v.full_value}
+                    var display = displayFormat(v);
+                    var id = idFormat(v);
+                    var d = {id: id, text: display};
+                    if (disabledData && disabledData.indexOf(v.id) !== -1) {
+                        d.disabled = true;
+                    }
+                    return d;
                 });
                 var more = !!data.next;
                 return {results: results, pagination: {"more": more}}
             }
         },
     })
+
 }
 
-function usersSelect2Init(selector, url) {
+function usersSelect2Init(selector, url, disabledData) {
     if (!url) {
         url = '/api/v1/users/users/'
     }
-    return $(selector).select2({
-        closeOnSelect: false,
-        ajax: {
-            url: url,
-            data: function (params) {
-                var page = params.page || 1;
-                var query = {
-                    search: params.term,
-                    offset: (page - 1) * 10,
-                    limit: 10
-                };
-                return query
-            },
-            processResults: function (data) {
-                var results = $.map(data.results, function (v, i) {
-                    var display = v.name + '(' + v.username +')';
-                    return {id: v.id, text: display}
-                });
-                var more = !!data.next;
-                return {results: results, pagination: {"more": more}}
-            }
-        },
-    })
 
+    function displayFormat(v) {
+        return v.name + '(' + v.username + ')';
+    }
+
+    var option = {
+        url: url,
+        selector: selector,
+        disabledData: disabledData,
+        displayFormat: displayFormat
+    };
+    return select2AjaxInit(option)
+}
+
+
+function nodesSelect2Init(selector, url, disabledData) {
+    if (!url) {
+        url = '/api/v1/assets/nodes/'
+    }
+
+    function displayFormat(v) {
+        return v.full_value;
+    }
+
+    var option = {
+        url: url,
+        selector: selector,
+        disabledData: disabledData,
+        displayFormat: displayFormat
+    };
+    return select2AjaxInit(option)
 }
 
 function showCeleryTaskLog(taskId) {
     var url = '/ops/celery/task/taskId/log/'.replace('taskId', taskId);
     window.open(url, '', 'width=900,height=600')
 }
+
+function getUserLang() {
+    let userLangEN = document.cookie.indexOf('django_language=en');
+    if (userLangEN === -1) {
+        return 'zh-CN'
+    } else {
+        return 'en-US'
+    }
+}
+
+function initDateRangePicker(selector, options) {
+    if (!options) {
+        options = {}
+    }
+    var zhLocale = {
+        format: 'YYYY-MM-DD HH:mm',
+        separator: ' ~ ',
+        applyLabel: "应用",
+        cancelLabel: "取消",
+        resetLabel: "重置",
+        daysOfWeek: ["日", "一", "二", "三", "四", "五", "六"],//汉化处理
+        monthNames: ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"],
+    };
+    var enLocale = {
+        format: "YYYY-MM-DD HH:mm",
+        separator: " - ",
+        applyLabel: "Apply",
+        cancelLabel: "Cancel",
+        resetLabel: "Reset",
+        daysOfWeek: ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"],
+        monthNames: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+    };
+    var defaultOption = {
+        singleDatePicker: true,
+        showDropdowns: true,
+        timePicker: true,
+        timePicker24Hour: true,
+        autoApply: true,
+    };
+    if (getUserLang() === 'zh-CN') {
+        defaultOption.locale = zhLocale;
+    } else {
+        // en-US
+        defaultOption.locale = enLocale;
+    }
+    options = Object.assign(defaultOption, options);
+    return $(selector).daterangepicker(options);
+}
+
+function reloadPage() {
+    setTimeout(function () {
+        window.location.reload();
+    }, 300);
+}
+
+function isEmptyObject(obj) {
+    return Object.keys(obj).length === 0
+}
+
+function getStatusIcon(status, mapping, title) {
+    var navy = '<i class="fa fa-circle text-navy" title=""></i>';
+    var danger = '<i class="fa fa-circle text-danger" title=""></i>';
+    var warning = '<i class="fa fa-circle text-warning" title=""></i>';
+    var icons = {
+        navy: navy,
+        danger: danger,
+        warning: warning
+    };
+    var defaultMapping = {
+        true: 'navy',
+        false: 'danger',
+        1: 'navy',
+        0: 'danger',
+        default: 'navy'
+    };
+    if (!mapping) {
+        mapping = defaultMapping;
+    }
+    var name = mapping[status] || mapping['default'];
+    var icon = icons[name];
+    if (title) {
+        icon = icon.replace('title=""', 'title="' + title + '"')
+    }
+    return icon;
+}
+

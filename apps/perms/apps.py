@@ -1,14 +1,15 @@
 from __future__ import unicode_literals
 
-from django.conf import settings
 from django.apps import AppConfig
+from django.utils.translation import gettext_lazy as _
 
 
 class PermsConfig(AppConfig):
     name = 'perms'
+    verbose_name = _('App Permissions')
 
     def ready(self):
-        from . import signals_handler
-        if not settings.XPACK_ENABLED:
-            settings.ASSETS_PERM_CACHE_ENABLE = False
-        return super().ready()
+        from . import signal_handlers  # noqa
+        from . import tasks  # noqa
+        from . import notifications  # noqa
+        super().ready()
